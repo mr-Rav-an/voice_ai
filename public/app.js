@@ -8,7 +8,7 @@ function addTurn(role, text) {
   const wrap = document.createElement("div");
   wrap.className = `turn ${role}`;
   wrap.innerHTML = `<div class="who"></div><div class="body"></div>`;
-  wrap.querySelector(".who").textContent = role === "agent" ? "Rahul (Steelman Solar)" : role;
+  wrap.querySelector(".who").textContent = role === "agent" ? "Saloni (Steelman Solar)" : role;
   wrap.querySelector(".body").textContent = text;
   logEl.appendChild(wrap);
   logEl.scrollTop = logEl.scrollHeight;
