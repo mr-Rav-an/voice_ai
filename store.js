@@ -26,10 +26,22 @@ const nextId = (prefix, key) => `${prefix}${seq[key]++}`;
 
 /** Mirror a document to Mongo. Failures are logged, never thrown into a live call. */
 function mirror(col, doc) {
-  if (!ready || !col) return;
-  col.replaceOne({ id: doc.id }, doc, { upsert: true }).catch((e) =>
-    console.error(`[store] write failed for ${doc.id}:`, e.message)
-  );
+  if (!ready || !col) return Promise.resolve(false);
+  return col.replaceOne({ id: doc.id }, doc, { upsert: true })
+    .then(() => true)
+    .catch((e) => {
+      console.error(`[store] write failed for ${doc.id}:`, e.message);
+      return false;
+    });
+}
+
+function normalizeLeadRow(row) {
+  return {
+    name: String(row?.name || "").trim(),
+    phone: row?.phone,
+    city: String(row?.city || row?.address || "").trim(),
+    notes: String(row?.notes || "").trim(),
+  };
 }
 
 export async function init() {
@@ -111,24 +123,38 @@ export const normalizePhone = (raw) => {
 };
 
 // --- leads -----------------------------------------------------------------
-export function addLeads(rows) {
-  const added = [], skipped = [];
-  for (const row of rows) {
+export function addLeads(rows, { persist = false } = {}) {
+  const added = [], skipped = [], pending = [];
+  for (const raw of rows) {
+    const row = normalizeLeadRow(raw);
     const phone = normalizePhone(row.phone);
-    if (!phone) { skipped.push({ ...row, reason: "invalid phone" }); continue; }
+    if (!phone) { skipped.push({ ...row, reason: "invalid phone — use a 10-digit Indian mobile starting with 6–9" }); continue; }
     if (mem.leads.some((l) => l.phone === phone)) {
       skipped.push({ ...row, phone, reason: "duplicate" });
       continue;
     }
     const lead = {
       id: nextId("L", "lead"),
-      name: row.name || "", phone, city: row.city || "", notes: row.notes || "",
+      name: row.name, phone, city: row.city, notes: row.notes,
       status: "pending", attempts: 0, lastCallId: null,
       createdAt: new Date().toISOString(),
     };
     mem.leads.push(lead);
-    mirror(leadsCol, lead);
+    pending.push(mirror(leadsCol, lead));
     added.push(lead);
+  }
+  if (persist && pending.length) {
+    return Promise.all(pending).then((results) => {
+      const failed = results.filter((ok) => !ok).length;
+      if (failed) {
+        return {
+          added,
+          skipped,
+          warning: `${failed} lead(s) saved in memory but failed to write to MongoDB — check MONGO_URI / network`,
+        };
+      }
+      return { added, skipped };
+    });
   }
   return { added, skipped };
 }

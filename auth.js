@@ -8,6 +8,7 @@ const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const COOKIE = "sid";
 
 const sessions = new Map(); // sid -> { username, exp }
+const usersByName = new Map(); // username -> user doc (avoids Mongo on every login)
 let usersCol = null;
 let clientOwned = null; // only set if we opened our own client
 
@@ -74,20 +75,25 @@ export async function initAuth(existingDb) {
 
   const username = process.env.ADMIN_USERNAME || "admin";
   const password = process.env.ADMIN_PASSWORD || "password";
-  const existing = await usersCol.findOne({ username });
+  let existing = await usersCol.findOne({ username });
   if (!existing) {
     const { salt, hash } = hashPassword(password);
-    await usersCol.insertOne({
+    const doc = {
       username,
       salt,
       passwordHash: hash,
       role: "admin",
       createdAt: new Date().toISOString(),
-    });
+    };
+    await usersCol.insertOne(doc);
+    existing = doc;
     console.log(`[auth] seeded admin user "${username}" in ${DB_NAME}.${USERS}`);
   } else {
     console.log(`[auth] admin ready (${DB_NAME}.${USERS})`);
   }
+
+  usersByName.clear();
+  for (const u of await usersCol.find({}).toArray()) usersByName.set(u.username, u);
 }
 
 export async function closeAuth() {
@@ -122,7 +128,7 @@ export function requireAuth(req, res) {
 }
 
 export async function login(username, password) {
-  const user = await usersCol.findOne({ username: String(username || "").trim() });
+  const user = usersByName.get(String(username || "").trim());
   if (!user || !verifyPassword(password, user.salt, user.passwordHash)) {
     return { ok: false, error: "Invalid username or password" };
   }

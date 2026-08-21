@@ -1,12 +1,4 @@
 const $ = (id) => document.getElementById(id);
-const api = (p, opts) =>
-  fetch(p, opts).then(async (r) => {
-    if (r.status === 401) {
-      location.href = "/login";
-      throw new Error("unauthorized");
-    }
-    return r.json();
-  });
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pill = (v) => (v ? `<span class="pill p-${esc(v)}">${esc(String(v).replace(/_/g, " "))}</span>` : '<span class="muted">—</span>');
 const inr = (n) => (n == null ? "—" : "₹" + Number(n).toLocaleString("en-IN"));
@@ -15,6 +7,41 @@ const when = (iso) => {
   const d = new Date(iso);
   return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 };
+
+const api = async (p, opts) => {
+  const r = await fetch(p, opts);
+  if (r.status === 401) {
+    location.href = "/login";
+    throw new Error("Please sign in again");
+  }
+  let data;
+  try { data = await r.json(); } catch { data = {}; }
+  if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+  return data;
+};
+
+function toast(msg, type = "ok") {
+  const el = document.createElement("div");
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  $("toasts").appendChild(el);
+  setTimeout(() => {
+    el.style.opacity = "0";
+    el.style.transition = "opacity .3s";
+    setTimeout(() => el.remove(), 300);
+  }, 4200);
+}
+
+function showTab(name) {
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.dataset.tab === name));
+  for (const n of ["calls", "leads", "upload"]) $("tab-" + n).hidden = n !== name;
+}
+
+function validPhone(raw) {
+  const d = String(raw || "").replace(/\D/g, "");
+  const ten = d.length > 10 ? d.slice(-10) : d;
+  return /^[6-9]\d{9}$/.test(ten) ? ten : null;
+}
 
 // --- auth ------------------------------------------------------------------
 api("/api/me").then((me) => { if ($("who")) $("who").textContent = me.username || ""; }).catch(() => {});
@@ -25,10 +52,7 @@ $("btn-logout")?.addEventListener("click", async () => {
 
 // --- tabs ------------------------------------------------------------------
 document.querySelectorAll(".tab").forEach((t) =>
-  t.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("on", x === t));
-    for (const name of ["calls", "leads", "upload"]) $("tab-" + name).hidden = name !== t.dataset.tab;
-  })
+  t.addEventListener("click", () => showTab(t.dataset.tab))
 );
 
 // --- render ----------------------------------------------------------------
@@ -52,7 +76,7 @@ function renderStats(s) {
 function renderCalls(calls) {
   const b = $("calls-body");
   if (!calls.length) {
-    b.innerHTML = `<tr><td colspan="11" class="empty">No calls yet. Upload leads, then start a campaign.</td></tr>`;
+    b.innerHTML = `<tr><td colspan="11" class="empty">No calls yet.<br><span class="muted">Add leads, then start a campaign.</span></td></tr>`;
     return;
   }
   b.innerHTML = calls.map((c) => {
@@ -60,7 +84,7 @@ function renderCalls(calls) {
     return `<tr class="click" data-id="${c.id}">
       <td class="muted">${when(c.startedAt)}</td>
       <td>${esc(c.phone || "—")}</td>
-      <td>${esc(c.leadName || "")}</td>
+      <td>${esc(c.leadName || "—")}</td>
       <td>${pill(c.outcome || (c.connected ? "connected" : c.exotelStatus))}</td>
       <td>${pill(c.interest)}</td>
       <td>${esc(cap.city || "—")}</td>
@@ -74,7 +98,6 @@ function renderCalls(calls) {
   b.querySelectorAll("tr.click").forEach((r) => r.addEventListener("click", () => openCall(r.dataset.id)));
 }
 
-// Survives the 3s poll re-render.
 const selected = new Set();
 
 function syncSelectionUi(leads) {
@@ -98,7 +121,8 @@ function renderLeads(leads) {
   $("leads-count").textContent = `${leads.length} lead${leads.length === 1 ? "" : "s"}`;
   const b = $("leads-body");
   if (!leads.length) {
-    b.innerHTML = `<tr><td colspan="7" class="empty">No leads. Add some on the Upload tab.</td></tr>`;
+    b.innerHTML = `<tr><td colspan="7" class="empty">No leads yet.<br><button type="button" class="ghost" id="go-upload" style="margin-top:12px">Add your first lead →</button></td></tr>`;
+    $("go-upload")?.addEventListener("click", () => showTab("upload"));
     syncSelectionUi(leads);
     return;
   }
@@ -128,13 +152,22 @@ function renderLeads(leads) {
       if (!confirm("Place a real call to this lead now?")) return;
       btn.disabled = true;
       btn.textContent = "Dialing…";
-      await api(`/api/leads/${btn.dataset.call}/call`, { method: "POST" });
-      refresh();
+      try {
+        await api(`/api/leads/${btn.dataset.call}/call`, { method: "POST" });
+        toast("Call placed");
+        refresh();
+      } catch (e) {
+        toast(e.message, "bad");
+        btn.disabled = false;
+        btn.textContent = "Call now";
+      }
     })
   );
   b.querySelectorAll("[data-del]").forEach((btn) =>
     btn.addEventListener("click", async () => {
+      if (!confirm("Delete this lead?")) return;
       await api(`/api/leads/${btn.dataset.del}`, { method: "DELETE" });
+      toast("Lead deleted", "warn");
       refresh();
     })
   );
@@ -180,13 +213,13 @@ async function openCall(id) {
 }
 
 // --- actions ---------------------------------------------------------------
-// Every start dials real phones. Make it deliberate.
 $("btn-start").addEventListener("click", async () => {
   const s = await api("/api/stats");
   const n = s.leadsPending;
-  if (!n) return alert("No pending leads to call.");
+  if (!n) return toast("No pending leads to call", "warn");
   if (!confirm(`Call ${n} pending lead${n === 1 ? "" : "s"} now?\n\nThis places real phone calls.`)) return;
   await api("/api/campaign/start", { method: "POST" });
+  toast("Campaign started");
   refresh();
 });
 
@@ -207,8 +240,8 @@ $("btn-call-selected").addEventListener("click", async () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ leadIds }),
   });
-  if (!r.ok) alert(r.error || "Could not start");
-  else selected.clear();
+  if (!r.ok) toast(r.error || "Could not start", "bad");
+  else { toast("Calling selected leads"); selected.clear(); }
   refresh();
 });
 
@@ -217,66 +250,167 @@ $("btn-del-selected").addEventListener("click", async () => {
   if (!ids.length || !confirm(`Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}?`)) return;
   for (const id of ids) await api(`/api/leads/${id}`, { method: "DELETE" });
   selected.clear();
+  toast("Selected leads deleted", "warn");
   refresh();
 });
-$("btn-stop").addEventListener("click", async () => { await api("/api/campaign/stop", { method: "POST" }); refresh(); });
+$("btn-stop").addEventListener("click", async () => {
+  await api("/api/campaign/stop", { method: "POST" });
+  toast("Campaign stopped", "warn");
+  refresh();
+});
 
 async function importCsv(text) {
-  if (!text.trim()) return;
-  const r = await api("/api/leads", { method: "POST", headers: { "Content-Type": "text/csv" }, body: text });
+  if (!text.trim()) return toast("Paste CSV data or choose a file first", "warn");
   const msg = $("import-msg");
+  msg.textContent = "Importing…";
+  msg.className = "msg";
+  try {
+    const r = await api("/api/leads", { method: "POST", headers: { "Content-Type": "text/csv" }, body: text });
+    if (!r.added?.length && !r.skipped?.length) {
+      msg.className = "msg bad";
+      msg.textContent = "Nothing imported — no phone column found.";
+      toast("No valid phone numbers found in CSV", "bad");
+      return;
+    }
+    const byReason = {};
+    for (const s of r.skipped || []) (byReason[s.reason] ||= []).push(s.phone || s.name || "?");
+    const detail = Object.entries(byReason)
+      .map(([reason, xs]) => `${xs.length} ${reason}`)
+      .join(", ");
 
-  if (!r.added.length && !r.skipped.length) {
-    msg.innerHTML = `<span style="color:var(--bad)">Nothing imported — no phone column found.</span>
-      Include a column of 10-digit Indian mobile numbers.`;
-    return;
+    if (r.added?.length) {
+      msg.className = "msg ok";
+      msg.textContent = `Added ${r.added.length}${detail ? ` · skipped ${r.skipped.length}: ${detail}` : ""}`;
+      toast(`Imported ${r.added.length} lead${r.added.length === 1 ? "" : "s"}`);
+      $("csv").value = "";
+      showTab("leads");
+    } else {
+      msg.className = "msg bad";
+      msg.textContent = `All ${r.skipped.length} skipped: ${detail}`;
+      toast(`Import failed — ${detail}`, "bad");
+    }
+    if (r.warning) toast(r.warning, "warn");
+    refresh();
+  } catch (e) {
+    msg.className = "msg bad";
+    msg.textContent = e.message;
+    toast(e.message, "bad");
   }
-
-  // Group the rejections: one example each, so a fully-skipped file explains itself.
-  const byReason = {};
-  for (const s of r.skipped) (byReason[s.reason] ||= []).push(s.phone || s.name || "?");
-  const detail = Object.entries(byReason)
-    .map(([reason, xs]) => `${xs.length} ${reason} (e.g. ${esc(xs[0])})`)
-    .join(", ");
-
-  msg.innerHTML =
-    `<span style="color:${r.added.length ? "var(--ok)" : "var(--bad)"}">Added ${r.added.length}</span>` +
-    (detail ? ` · skipped ${r.skipped.length}: ${detail}` : "");
-  if (r.added.length) $("csv").value = "";
-  refresh();
 }
+
 $("btn-import").addEventListener("click", () => importCsv($("csv").value));
 $("file").addEventListener("change", async (e) => {
   const f = e.target.files[0];
-  if (f) importCsv(await f.text());
+  if (f) {
+    const text = await f.text();
+    $("csv").value = text;
+    importCsv(text);
+  }
   e.target.value = "";
 });
 
-$("btn-add-lead").addEventListener("click", async () => {
+// Drag-and-drop CSV
+const dropzone = $("dropzone");
+const fileInput = $("file");
+
+dropzone?.addEventListener("click", () => fileInput?.click());
+dropzone?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput?.click(); }
+});
+dropzone?.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("drag"); });
+dropzone?.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
+dropzone?.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  dropzone.classList.remove("drag");
+  const f = e.dataTransfer.files[0];
+  if (f) {
+    const text = await f.text();
+    $("csv").value = text;
+    importCsv(text);
+  }
+});
+
+// --- add single lead -------------------------------------------------------
+const phoneInput = $("lead-phone");
+const phoneHint = $("phone-hint");
+
+phoneInput?.addEventListener("input", () => {
+  const v = phoneInput.value.trim();
+  if (!v) {
+    phoneInput.classList.remove("invalid");
+    phoneHint.className = "hint";
+    phoneHint.textContent = "10 digits, or +91 / 0 prefix";
+    return;
+  }
+  const ok = validPhone(v);
+  phoneInput.classList.toggle("invalid", !ok);
+  phoneHint.className = ok ? "hint" : "hint err";
+  phoneHint.textContent = ok ? `Will save as ${ok}` : "Invalid — must be a 10-digit mobile starting with 6–9";
+});
+
+$("lead-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
   const name = $("lead-name").value.trim();
   const phone = $("lead-phone").value.trim();
   const city = $("lead-city").value.trim();
   const notes = $("lead-notes").value.trim();
   const msg = $("add-msg");
+  const btn = $("btn-add-lead");
+
   if (!phone) {
-    msg.innerHTML = `<span style="color:var(--bad)">Phone is required.</span>`;
+    msg.className = "msg bad";
+    msg.textContent = "Phone number is required.";
+    phoneInput.focus();
     return;
   }
-  const r = await api("/api/leads", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, phone, city, notes }),
-  });
-  if (r.added?.length) {
-    msg.innerHTML = `<span style="color:var(--ok)">Added ${esc(r.added[0].name || r.added[0].phone)}</span>`;
-    $("lead-name").value = "";
-    $("lead-phone").value = "";
-    $("lead-city").value = "";
-    $("lead-notes").value = "";
-    refresh();
-  } else {
-    const reason = r.skipped?.[0]?.reason || "not added";
-    msg.innerHTML = `<span style="color:var(--bad)">Skipped: ${esc(reason)}</span>`;
+  const normalized = validPhone(phone);
+  if (!normalized) {
+    msg.className = "msg bad";
+    msg.textContent = "Invalid phone — use a 10-digit Indian mobile (6–9 first digit).";
+    phoneInput.focus();
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Saving…";
+  msg.className = "msg";
+  msg.textContent = "";
+
+  try {
+    const r = await api("/api/leads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, phone, city, notes }),
+    });
+
+    if (r.added?.length) {
+      const lead = r.added[0];
+      const label = lead.name ? `${lead.name} (${lead.phone})` : lead.phone;
+      msg.className = "msg ok";
+      msg.textContent = `Saved ${label}${lead.city ? " · " + lead.city : ""}`;
+      toast(`Lead saved — ${label}`);
+      if (r.warning) toast(r.warning, "warn");
+      $("lead-form").reset();
+      phoneInput.classList.remove("invalid");
+      phoneHint.className = "hint";
+      phoneHint.textContent = "10 digits, or +91 / 0 prefix";
+      showTab("leads");
+      refresh();
+    } else {
+      const reason = r.skipped?.[0]?.reason || "Could not add lead";
+      msg.className = "msg bad";
+      msg.textContent = reason === "duplicate"
+        ? `Phone ${normalized} is already in your leads list.`
+        : reason;
+      toast(msg.textContent, "bad");
+    }
+  } catch (err) {
+    msg.className = "msg bad";
+    msg.textContent = err.message;
+    toast(err.message, "bad");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Save lead";
   }
 });
 

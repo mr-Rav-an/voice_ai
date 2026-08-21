@@ -61,12 +61,13 @@ export async function handleApi(req, res, url) {
       const ct = req.headers["content-type"] || "";
       let rows;
       if (ct.includes("application/json")) {
-        const parsed = JSON.parse(body || "[]");
+        const parsed = JSON.parse(body || "{}");
         rows = Array.isArray(parsed) ? parsed : [parsed];
       } else {
         rows = store.parseCsv(body);
       }
-      json(res, 200, store.addLeads(rows));
+      const result = await store.addLeads(rows, { persist: true });
+      json(res, 200, result);
       return true;
     }
 
