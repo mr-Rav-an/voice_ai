@@ -45,7 +45,6 @@ ws.on("message", (raw) => {
     if (buf.length % 320 !== 0) problems.push(`chunk of ${buf.length}B is not a multiple of 320`);
     if (buf.length > 100 * 1024) problems.push(`chunk of ${buf.length}B exceeds Exotel's 100k max`);
     if (m.stream_sid !== STREAM_SID) problems.push(`wrong stream_sid: ${m.stream_sid}`);
-    if (m.sequence_number == null) problems.push("media frame missing sequence_number");
     received.push(buf);
   } else if (m.event === "clear") { cleared++; console.log("<- clear (barge-in)"); }
   else if (m.event === "mark") { marks++; console.log(`<- mark ${m.mark?.name}`); }

@@ -69,7 +69,7 @@ server.on("upgrade", (req, socket, head) => {
     const pathToken = url.pathname.slice("/exotel-stream/".length) || null;
     const token = url.searchParams.get("token") || pathToken;
     if (STREAM_SECRET && token !== STREAM_SECRET) {
-      console.warn(`[exotel] rejected unauthenticated upgrade from ${req.socket.remoteAddress}`);
+      console.warn(`[exotel] rejected upgrade — url="${req.url}" token=${token ? "present-but-wrong" : "absent"}`);
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       return socket.destroy();
     }
