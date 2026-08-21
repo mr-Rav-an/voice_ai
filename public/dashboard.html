@@ -121,8 +121,11 @@
   <section id="tab-upload" hidden>
     <div class="bar"><strong>Paste CSV or upload a file</strong></div>
     <p class="muted" style="margin-top:0">
-      Columns: <code>name, phone, city, notes</code> — a header row is detected automatically.
-      Phone can be 10-digit, 0-prefixed, or +91. Duplicates and invalid numbers are skipped.
+      A column of 10-digit Indian mobile numbers is all that is required — the phone column is
+      found by content, so unusual header names, a missing header row, or extra columns are all
+      fine. <code>name</code>, <code>city</code> and <code>notes</code> are picked up when present.
+      Numbers may be 10-digit, <code>0</code>-prefixed or <code>+91</code>. Duplicates and
+      non-mobile numbers (landlines) are skipped and reported below.
     </p>
     <textarea id="csv" placeholder="name,phone,city&#10;Ankur,6294035244,Kolkata&#10;Rohit,9871606366,Delhi"></textarea>
     <div class="bar" style="margin-top:12px">

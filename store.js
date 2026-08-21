@@ -201,21 +201,36 @@ export function parseCsv(text) {
   if (!rows.length) return [];
 
   const header = rows[0].map((h) => h.trim().toLowerCase());
-  const idx = (...names) => header.findIndex((h) => names.includes(h));
-  const iPhone = idx("phone", "mobile", "number", "contact");
-  const iName = idx("name", "customer", "lead");
-  const iCity = idx("city", "location");
-  const iNotes = idx("notes", "note", "remarks");
+  const has = (h, ...words) => words.some((w) => h.replace(/[\s_-]/g, "").includes(w));
+  const idx = (...words) => header.findIndex((h) => has(h, ...words));
 
-  // Headerless file with a phone number in the first column.
-  if (iPhone === -1 && normalizePhone(rows[0][0])) {
-    return rows.map((r) => ({ phone: r[0], name: r[1] || "", city: r[2] || "" }));
+  let iPhone = idx("phone", "mobile", "number", "contact", "cell", "whatsapp", "msisdn");
+  const iName = idx("name", "customer", "lead", "client");
+  const iCity = idx("city", "location", "town", "area");
+  const iNotes = idx("note", "remark", "comment");
+
+  // The header row may be absent, or named something we don't recognise. Decide by
+  // content instead: pick the column where most values look like Indian mobile numbers.
+  const looksHeaderless = rows[0].some((c) => normalizePhone(c));
+  const body = looksHeaderless ? rows : rows.slice(1);
+
+  if (iPhone === -1) {
+    const width = Math.max(...rows.map((r) => r.length));
+    let best = -1, bestHits = 0;
+    for (let col = 0; col < width; col++) {
+      const hits = body.filter((r) => normalizePhone(r[col])).length;
+      if (hits > bestHits) { bestHits = hits; best = col; }
+    }
+    // Require it to work for at least half the rows, so we don't latch onto a stray cell.
+    if (best >= 0 && bestHits >= Math.max(1, Math.floor(body.length / 2))) iPhone = best;
   }
+  if (iPhone === -1) return [];
 
-  return rows.slice(1).filter((r) => r.some((c) => c.trim())).map((r) => ({
-    phone: iPhone >= 0 ? r[iPhone] : r[0],
-    name: iName >= 0 ? r[iName] : "",
-    city: iCity >= 0 ? r[iCity] : "",
-    notes: iNotes >= 0 ? r[iNotes] : "",
+  const pick = (r, i) => (i >= 0 && i !== iPhone ? (r[i] || "").trim() : "");
+  return body.filter((r) => r.some((c) => c.trim())).map((r) => ({
+    phone: r[iPhone],
+    name: pick(r, iName),
+    city: pick(r, iCity),
+    notes: pick(r, iNotes),
   }));
 }

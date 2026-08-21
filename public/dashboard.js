@@ -210,9 +210,25 @@ $("btn-stop").addEventListener("click", async () => { await api("/api/campaign/s
 async function importCsv(text) {
   if (!text.trim()) return;
   const r = await api("/api/leads", { method: "POST", headers: { "Content-Type": "text/csv" }, body: text });
-  $("import-msg").textContent =
-    `Added ${r.added.length}` + (r.skipped.length ? ` · skipped ${r.skipped.length} (${r.skipped[0].reason})` : "");
-  $("csv").value = "";
+  const msg = $("import-msg");
+
+  if (!r.added.length && !r.skipped.length) {
+    msg.innerHTML = `<span style="color:var(--bad)">Nothing imported — no phone column found.</span>
+      Include a column of 10-digit Indian mobile numbers.`;
+    return;
+  }
+
+  // Group the rejections: one example each, so a fully-skipped file explains itself.
+  const byReason = {};
+  for (const s of r.skipped) (byReason[s.reason] ||= []).push(s.phone || s.name || "?");
+  const detail = Object.entries(byReason)
+    .map(([reason, xs]) => `${xs.length} ${reason} (e.g. ${esc(xs[0])})`)
+    .join(", ");
+
+  msg.innerHTML =
+    `<span style="color:${r.added.length ? "var(--ok)" : "var(--bad)"}">Added ${r.added.length}</span>` +
+    (detail ? ` · skipped ${r.skipped.length}: ${detail}` : "");
+  if (r.added.length) $("csv").value = "";
   refresh();
 }
 $("btn-import").addEventListener("click", () => importCsv($("csv").value));
