@@ -62,9 +62,13 @@ server.on("upgrade", (req, socket, head) => {
     return browserWss.handleUpgrade(req, socket, head, (ws) => browserWss.emit("connection", ws, req));
   }
 
-  if (url.pathname === "/exotel-stream") {
-    // Exotel cannot send auth headers, so the shared secret rides in the query string.
-    if (STREAM_SECRET && url.searchParams.get("token") !== STREAM_SECRET) {
+  // Some Exotel applet URL fields strip query strings, so the token is accepted either as
+  // ?token=<secret> or as a trailing path segment /exotel-stream/<secret>.
+  const streamMatch = url.pathname === "/exotel-stream" || url.pathname.startsWith("/exotel-stream/");
+  if (streamMatch) {
+    const pathToken = url.pathname.slice("/exotel-stream/".length) || null;
+    const token = url.searchParams.get("token") || pathToken;
+    if (STREAM_SECRET && token !== STREAM_SECRET) {
       console.warn(`[exotel] rejected unauthenticated upgrade from ${req.socket.remoteAddress}`);
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       return socket.destroy();
