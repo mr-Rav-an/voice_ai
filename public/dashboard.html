@@ -82,6 +82,8 @@
   <div class="sun"></div>
   <h1>Steelman Solar — Call Dashboard</h1>
   <div class="spacer"></div>
+  <span id="who" class="muted"></span>
+  <button id="btn-logout" class="ghost">Logout</button>
   <span id="campaign-status" class="muted"><span class="dot"></span>idle</span>
   <button id="btn-start">Start campaign</button>
   <button id="btn-stop" class="ghost" disabled>Stop</button>
@@ -119,13 +121,33 @@
   </section>
 
   <section id="tab-upload" hidden>
-    <div class="bar"><strong>Paste CSV or upload a file</strong></div>
+    <div class="bar"><strong>Add one lead</strong></div>
+    <div class="bar" style="align-items:flex-end">
+      <div>
+        <label class="muted" style="display:block;font-size:11px;margin-bottom:4px">Name</label>
+        <input type="text" id="lead-name" placeholder="Ankur" style="width:160px" />
+      </div>
+      <div>
+        <label class="muted" style="display:block;font-size:11px;margin-bottom:4px">Phone</label>
+        <input type="text" id="lead-phone" placeholder="9876543210" style="width:150px" />
+      </div>
+      <div>
+        <label class="muted" style="display:block;font-size:11px;margin-bottom:4px">City / address</label>
+        <input type="text" id="lead-city" placeholder="Delhi" style="width:180px" />
+      </div>
+      <div>
+        <label class="muted" style="display:block;font-size:11px;margin-bottom:4px">Notes</label>
+        <input type="text" id="lead-notes" placeholder="optional" style="width:160px" />
+      </div>
+      <button id="btn-add-lead" type="button">Add lead</button>
+    </div>
+    <p id="add-msg" class="muted" style="margin-top:0"></p>
+
+    <div class="bar" style="margin-top:22px"><strong>Or paste CSV / upload a file</strong></div>
     <p class="muted" style="margin-top:0">
-      A column of 10-digit Indian mobile numbers is all that is required — the phone column is
-      found by content, so unusual header names, a missing header row, or extra columns are all
-      fine. <code>name</code>, <code>city</code> and <code>notes</code> are picked up when present.
-      Numbers may be 10-digit, <code>0</code>-prefixed or <code>+91</code>. Duplicates and
-      non-mobile numbers (landlines) are skipped and reported below.
+      Headers like <code>name,phone,city</code> or <code>name,phone,address</code> work.
+      Without headers, use <code>name,phone,city</code> order. Numbers may be 10-digit,
+      <code>0</code>-prefixed or <code>+91</code>. Duplicates and non-mobile numbers are skipped.
     </p>
     <textarea id="csv" placeholder="name,phone,city&#10;Ankur,6294035244,Kolkata&#10;Rohit,9871606366,Delhi"></textarea>
     <div class="bar" style="margin-top:12px">

@@ -1,5 +1,6 @@
 // REST API behind the dashboard.
 import * as store from "./store.js";
+import * as auth from "./auth.js";
 import { startCampaign, stopCampaign, campaignState, dialLead } from "./campaign.js";
 
 const json = (res, code, body) => {
@@ -20,6 +21,31 @@ export async function handleApi(req, res, url) {
   const p = url.pathname;
 
   try {
+    if (p === "/api/login" && req.method === "POST") {
+      const body = JSON.parse((await readBody(req)) || "{}");
+      const result = await auth.login(body.username, body.password);
+      if (!result.ok) return json(res, 401, { error: result.error }), true;
+      auth.attachLoginCookie(res, req, result.sid);
+      json(res, 200, { ok: true, username: result.username });
+      return true;
+    }
+
+    if (p === "/api/logout" && req.method === "POST") {
+      auth.logout(req, res);
+      json(res, 200, { ok: true });
+      return true;
+    }
+
+    if (p === "/api/me" && req.method === "GET") {
+      const s = auth.getSession(req);
+      if (!s) return json(res, 401, { error: "unauthorized" }), true;
+      json(res, 200, { username: s.username });
+      return true;
+    }
+
+    // Everything below requires a logged-in admin.
+    if (!auth.requireAuth(req, res)) return true;
+
     if (p === "/api/stats" && req.method === "GET") {
       json(res, 200, { ...store.stats(), campaign: campaignState() });
       return true;

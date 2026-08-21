@@ -8,6 +8,7 @@ import { connectAgent } from "./deepgram-agent.js";
 import { handleExotelStream } from "./exotel/stream.js";
 import { handleApi } from "./api.js";
 import * as store from "./store.js";
+import * as auth from "./auth.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -18,6 +19,25 @@ if (!process.env.DEEPGRAM_API_KEY) {
 }
 
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
+
+const PUBLIC_PATHS = new Set([
+  "/login",
+  "/login.html",
+  "/health",
+  "/exotel/status",
+  "/demo",
+  "/index.html",
+  "/app.js",
+  "/mic-worklet.js",
+]);
+
+function isPublicPath(pathname) {
+  if (PUBLIC_PATHS.has(pathname)) return true;
+  if (pathname.startsWith("/api/login") || pathname.startsWith("/api/logout") || pathname.startsWith("/api/me")) {
+    return true;
+  }
+  return false;
+}
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -38,6 +58,29 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200).end("ok");
     });
     return;
+  }
+
+  if (url.pathname === "/login" || url.pathname === "/login.html") {
+    if (auth.getSession(req)) {
+      res.writeHead(302, { Location: "/" });
+      return res.end();
+    }
+    const full = path.join(__dirname, "public", "login.html");
+    return fs.readFile(full, (err, data) => {
+      if (err) return res.writeHead(404).end("Not found");
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(data);
+    });
+  }
+
+  // Dashboard and other static assets require login.
+  if (!isPublicPath(url.pathname) && !auth.getSession(req)) {
+    if (url.pathname.startsWith("/api/")) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: "unauthorized" }));
+    }
+    res.writeHead(302, { Location: "/login" });
+    return res.end();
   }
 
   const file =
@@ -115,15 +158,21 @@ browserWss.on("connection", (browser) => {
 // A crash here kills every in-flight call, so log and keep serving.
 process.on("unhandledRejection", (e) => console.error("[unhandledRejection]", e));
 for (const sig of ["SIGINT", "SIGTERM"]) {
-  process.on(sig, async () => { await store.close(); process.exit(0); });
+  process.on(sig, async () => {
+    await store.close();
+    await auth.closeAuth();
+    process.exit(0);
+  });
 }
 process.on("uncaughtException", (e) => console.error("[uncaughtException]", e));
 
-await store.init();
+const mongoDb = await store.init();
+await auth.initAuth(mongoDb);
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Steelman Solar agent`);
   console.log(`  dashboard     -> http://localhost:${PORT}`);
+  console.log(`  login         -> http://localhost:${PORT}/login`);
   console.log(`  mic demo      -> http://localhost:${PORT}/demo`);
   console.log(`  exotel stream -> ws://localhost:${PORT}/exotel-stream`);
 });

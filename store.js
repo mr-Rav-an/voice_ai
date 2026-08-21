@@ -14,6 +14,7 @@ const LEADS = "solar_leads"; // namespaced: the AI database is shared
 const CALLS = "solar_calls";
 
 let client = null;
+let db = null;
 let leadsCol = null;
 let callsCol = null;
 let ready = false;
@@ -37,7 +38,7 @@ export async function init() {
 
   client = new MongoClient(uri, { serverSelectionTimeoutMS: 10000 });
   await client.connect();
-  const db = client.db(DB_NAME);
+  db = client.db(DB_NAME);
   leadsCol = db.collection(LEADS);
   callsCol = db.collection(CALLS);
 
@@ -67,6 +68,12 @@ export async function init() {
     `[store] mongo ${DB_NAME}.${LEADS}/${CALLS} — ${mem.leads.length} leads, ${mem.calls.length} calls` +
     (stranded.length ? `, released ${stranded.length} stranded` : "")
   );
+  return db;
+}
+
+/** Shared Mongo database handle (after init). */
+export function getDb() {
+  return db;
 }
 
 /** One-time import of the old file store, so nothing from local testing is lost. */
@@ -241,9 +248,10 @@ export function parseCsv(text) {
   const idx = (...words) => header.findIndex((h) => has(h, ...words));
 
   let iPhone = idx("phone", "mobile", "number", "contact", "cell", "whatsapp", "msisdn");
-  const iName = idx("name", "customer", "lead", "client");
-  const iCity = idx("city", "location", "town", "area");
-  const iNotes = idx("note", "remark", "comment");
+  let iName = idx("name", "customer", "client");
+  // "address" is what operators often type instead of city
+  let iCity = idx("city", "location", "town", "area", "address", "addr");
+  let iNotes = idx("note", "remark", "comment");
 
   const looksHeaderless = rows[0].some((c) => normalizePhone(c));
   const body = looksHeaderless ? rows : rows.slice(1);
@@ -259,11 +267,25 @@ export function parseCsv(text) {
   }
   if (iPhone === -1) return [];
 
+  // Headerless / odd headers: columns left of phone → name, right → city (then notes)
+  if (looksHeaderless || (iName < 0 && iCity < 0)) {
+    iName = -1;
+    iCity = -1;
+    iNotes = -1;
+  }
+
   const pick = (r, i) => (i >= 0 && i !== iPhone ? (r[i] || "").trim() : "");
-  return body.filter((r) => r.some((c) => c.trim())).map((r) => ({
-    phone: r[iPhone],
-    name: pick(r, iName),
-    city: pick(r, iCity),
-    notes: pick(r, iNotes),
-  }));
+  return body.filter((r) => r.some((c) => c.trim())).map((r) => {
+    let name = pick(r, iName);
+    let city = pick(r, iCity);
+    let notes = pick(r, iNotes);
+    if (!name || !city) {
+      const left = r.slice(0, iPhone).map((c) => (c || "").trim()).filter(Boolean);
+      const right = r.slice(iPhone + 1).map((c) => (c || "").trim()).filter(Boolean);
+      if (!name && left.length) name = left[0];
+      if (!city && right.length) city = right[0];
+      if (!notes && right.length > 1) notes = right.slice(1).join("; ");
+    }
+    return { phone: r[iPhone], name, city, notes };
+  });
 }

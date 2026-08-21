@@ -1,5 +1,12 @@
 const $ = (id) => document.getElementById(id);
-const api = (p, opts) => fetch(p, opts).then((r) => r.json());
+const api = (p, opts) =>
+  fetch(p, opts).then(async (r) => {
+    if (r.status === 401) {
+      location.href = "/login";
+      throw new Error("unauthorized");
+    }
+    return r.json();
+  });
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pill = (v) => (v ? `<span class="pill p-${esc(v)}">${esc(String(v).replace(/_/g, " "))}</span>` : '<span class="muted">—</span>');
 const inr = (n) => (n == null ? "—" : "₹" + Number(n).toLocaleString("en-IN"));
@@ -8,6 +15,13 @@ const when = (iso) => {
   const d = new Date(iso);
   return d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 };
+
+// --- auth ------------------------------------------------------------------
+api("/api/me").then((me) => { if ($("who")) $("who").textContent = me.username || ""; }).catch(() => {});
+$("btn-logout")?.addEventListener("click", async () => {
+  await fetch("/api/logout", { method: "POST" });
+  location.href = "/login";
+});
 
 // --- tabs ------------------------------------------------------------------
 document.querySelectorAll(".tab").forEach((t) =>
@@ -236,6 +250,34 @@ $("file").addEventListener("change", async (e) => {
   const f = e.target.files[0];
   if (f) importCsv(await f.text());
   e.target.value = "";
+});
+
+$("btn-add-lead").addEventListener("click", async () => {
+  const name = $("lead-name").value.trim();
+  const phone = $("lead-phone").value.trim();
+  const city = $("lead-city").value.trim();
+  const notes = $("lead-notes").value.trim();
+  const msg = $("add-msg");
+  if (!phone) {
+    msg.innerHTML = `<span style="color:var(--bad)">Phone is required.</span>`;
+    return;
+  }
+  const r = await api("/api/leads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, phone, city, notes }),
+  });
+  if (r.added?.length) {
+    msg.innerHTML = `<span style="color:var(--ok)">Added ${esc(r.added[0].name || r.added[0].phone)}</span>`;
+    $("lead-name").value = "";
+    $("lead-phone").value = "";
+    $("lead-city").value = "";
+    $("lead-notes").value = "";
+    refresh();
+  } else {
+    const reason = r.skipped?.[0]?.reason || "not added";
+    msg.innerHTML = `<span style="color:var(--bad)">Skipped: ${esc(reason)}</span>`;
+  }
 });
 
 // --- polling ---------------------------------------------------------------
