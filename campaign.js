@@ -10,6 +10,7 @@ const MAX_ATTEMPTS = 2;
 let running = false;
 let stopRequested = false;
 let current = null;
+let queue = null; // explicit lead ids, or null to work the whole pending list
 const listeners = new Set();
 
 export const onCampaignEvent = (fn) => (listeners.add(fn), () => listeners.delete(fn));
@@ -18,6 +19,7 @@ const emit = (e) => listeners.forEach((fn) => { try { fn(e); } catch {} });
 export const campaignState = () => ({
   running,
   current,
+  queued: queue ? queue.length : null,
   pending: store.listLeads().filter((l) => l.status === "pending").length,
 });
 
@@ -68,15 +70,34 @@ async function dialOne(lead) {
   current = null;
 }
 
-export async function startCampaign() {
+/**
+ * @param {string[]} [leadIds] Dial exactly these, in order. Omit to work the pending queue.
+ * Explicitly selected leads are dialed regardless of status — you may want to call someone
+ * back — except `dnc`, which is never dialed again under any circumstances.
+ */
+export async function startCampaign(leadIds) {
   if (running) return { ok: false, error: "already running" };
+
+  if (Array.isArray(leadIds) && leadIds.length) {
+    const leads = leadIds.map((id) => store.getLead(id)).filter(Boolean);
+    const dnc = leads.filter((l) => l.status === "dnc");
+    queue = leads.filter((l) => l.status !== "dnc").map((l) => l.id);
+    if (!queue.length) {
+      queue = null; // don't leave a stale empty queue in campaignState
+      return { ok: false, error: "nothing dialable in selection" };
+    }
+    if (dnc.length) console.log(`[campaign] skipping ${dnc.length} lead(s) on the do-not-call list`);
+  } else {
+    queue = null;
+  }
+
   running = true;
   stopRequested = false;
-  emit({ type: "started" });
+  emit({ type: "started", count: queue ? queue.length : null });
 
   (async () => {
     while (!stopRequested) {
-      const lead = store.nextPendingLead(MAX_ATTEMPTS);
+      const lead = queue ? store.getLead(queue.shift()) : store.nextPendingLead(MAX_ATTEMPTS);
       if (!lead) break;
       await dialOne(lead);
       if (stopRequested) break;
@@ -84,6 +105,7 @@ export async function startCampaign() {
     }
     running = false;
     current = null;
+    queue = null;
     emit({ type: "stopped" });
   })();
 

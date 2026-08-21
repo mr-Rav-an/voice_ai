@@ -32,6 +32,18 @@ function persist() {
 
 load();
 
+// A lead is only "calling" while a process is actively dialing it. If we are loading the
+// file, no call is in flight — anything left in that state was stranded by a crash or
+// restart, so release it back to the queue rather than leaving it undialable forever.
+{
+  const stranded = db.leads.filter((l) => l.status === "calling");
+  if (stranded.length) {
+    stranded.forEach((l) => (l.status = "pending"));
+    console.log(`[store] released ${stranded.length} lead(s) stranded in "calling"`);
+    persist();
+  }
+}
+
 export const normalizePhone = (raw) => {
   const d = String(raw || "").replace(/\D/g, "");
   const ten = d.length > 10 ? d.slice(-10) : d;

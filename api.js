@@ -74,7 +74,10 @@ export async function handleApi(req, res, url) {
     }
 
     if (p === "/api/campaign/start" && req.method === "POST") {
-      json(res, 200, await startCampaign());
+      const body = await readBody(req);
+      let leadIds;
+      try { leadIds = JSON.parse(body || "{}").leadIds; } catch { leadIds = undefined; }
+      json(res, 200, await startCampaign(leadIds));
       return true;
     }
 

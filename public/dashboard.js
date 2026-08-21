@@ -27,8 +27,9 @@ function renderStats(s) {
   ].map(([l, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
 
   const c = s.campaign || {};
+  const left = c.queued != null ? c.queued : c.pending;
   $("campaign-status").innerHTML = c.running
-    ? `<span class="dot live"></span>${c.current ? `calling ${esc(c.current.phone)}` : "running"} · ${c.pending} left`
+    ? `<span class="dot live"></span>${c.current ? `calling ${esc(c.current.phone)}` : "running"} · ${left} left`
     : `<span class="dot"></span>idle`;
   $("btn-start").disabled = !!c.running;
   $("btn-stop").disabled = !c.running;
@@ -59,14 +60,37 @@ function renderCalls(calls) {
   b.querySelectorAll("tr.click").forEach((r) => r.addEventListener("click", () => openCall(r.dataset.id)));
 }
 
+// Survives the 3s poll re-render.
+const selected = new Set();
+
+function syncSelectionUi(leads) {
+  for (const id of [...selected]) if (!leads.some((l) => l.id === id)) selected.delete(id);
+  const n = selected.size;
+  $("btn-call-selected").disabled = n === 0;
+  $("btn-del-selected").disabled = n === 0;
+  $("btn-call-selected").textContent = n ? `Call selected (${n})` : "Call selected";
+  $("btn-del-selected").textContent = n ? `Delete selected (${n})` : "Delete selected";
+  const all = $("check-all");
+  if (all) {
+    all.checked = n > 0 && n === leads.length;
+    all.indeterminate = n > 0 && n < leads.length;
+  }
+  document.querySelectorAll("#leads-body tr[data-lead]").forEach((tr) =>
+    tr.classList.toggle("sel", selected.has(tr.dataset.lead))
+  );
+}
+
 function renderLeads(leads) {
   $("leads-count").textContent = `${leads.length} lead${leads.length === 1 ? "" : "s"}`;
   const b = $("leads-body");
   if (!leads.length) {
-    b.innerHTML = `<tr><td colspan="6" class="empty">No leads. Add some on the Upload tab.</td></tr>`;
+    b.innerHTML = `<tr><td colspan="7" class="empty">No leads. Add some on the Upload tab.</td></tr>`;
+    syncSelectionUi(leads);
     return;
   }
-  b.innerHTML = leads.map((l) => `<tr>
+  b.innerHTML = leads.map((l) => `<tr data-lead="${l.id}">
+    <td><input type="checkbox" data-pick="${l.id}" ${selected.has(l.id) ? "checked" : ""}
+        ${l.status === "dnc" ? "disabled title='Do not call'" : ""} /></td>
     <td>${esc(l.name || "—")}</td>
     <td>${esc(l.phone)}</td>
     <td>${esc(l.city || "—")}</td>
@@ -77,8 +101,17 @@ function renderLeads(leads) {
       <button class="danger" data-del="${l.id}">Delete</button>
     </td></tr>`).join("");
 
+  b.querySelectorAll("[data-pick]").forEach((cb) =>
+    cb.addEventListener("change", () => {
+      cb.checked ? selected.add(cb.dataset.pick) : selected.delete(cb.dataset.pick);
+      syncSelectionUi(leads);
+    })
+  );
+  syncSelectionUi(leads);
+
   b.querySelectorAll("[data-call]").forEach((btn) =>
     btn.addEventListener("click", async () => {
+      if (!confirm("Place a real call to this lead now?")) return;
       btn.disabled = true;
       btn.textContent = "Dialing…";
       await api(`/api/leads/${btn.dataset.call}/call`, { method: "POST" });
@@ -133,7 +166,45 @@ async function openCall(id) {
 }
 
 // --- actions ---------------------------------------------------------------
-$("btn-start").addEventListener("click", async () => { await api("/api/campaign/start", { method: "POST" }); refresh(); });
+// Every start dials real phones. Make it deliberate.
+$("btn-start").addEventListener("click", async () => {
+  const s = await api("/api/stats");
+  const n = s.leadsPending;
+  if (!n) return alert("No pending leads to call.");
+  if (!confirm(`Call ${n} pending lead${n === 1 ? "" : "s"} now?\n\nThis places real phone calls.`)) return;
+  await api("/api/campaign/start", { method: "POST" });
+  refresh();
+});
+
+$("check-all").addEventListener("change", (e) => {
+  const rows = [...document.querySelectorAll("#leads-body [data-pick]:not([disabled])")];
+  selected.clear();
+  if (e.target.checked) rows.forEach((cb) => selected.add(cb.dataset.pick));
+  rows.forEach((cb) => (cb.checked = e.target.checked));
+  syncSelectionUi([...document.querySelectorAll("#leads-body tr[data-lead]")].map((tr) => ({ id: tr.dataset.lead })));
+});
+
+$("btn-call-selected").addEventListener("click", async () => {
+  const leadIds = [...selected];
+  if (!leadIds.length) return;
+  if (!confirm(`Call ${leadIds.length} selected lead${leadIds.length === 1 ? "" : "s"} now?\n\nThis places real phone calls.`)) return;
+  const r = await api("/api/campaign/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ leadIds }),
+  });
+  if (!r.ok) alert(r.error || "Could not start");
+  else selected.clear();
+  refresh();
+});
+
+$("btn-del-selected").addEventListener("click", async () => {
+  const ids = [...selected];
+  if (!ids.length || !confirm(`Delete ${ids.length} lead${ids.length === 1 ? "" : "s"}?`)) return;
+  for (const id of ids) await api(`/api/leads/${id}`, { method: "DELETE" });
+  selected.clear();
+  refresh();
+});
 $("btn-stop").addEventListener("click", async () => { await api("/api/campaign/stop", { method: "POST" }); refresh(); });
 
 async function importCsv(text) {
