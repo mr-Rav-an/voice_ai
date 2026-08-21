@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: steelman-solar-agent
+    runtime: node
+    plan: starter          # not "free": free instances sleep, and a cold start = silence on the call
+    region: singapore      # match the Exotel data centre; voice latency is audible
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: EXOTEL_API_KEY
+        sync: false
+      - key: EXOTEL_API_TOKEN
+        sync: false
+      - key: EXOTEL_ACCOUNT_SID
+        sync: false
+      - key: EXOTEL_SUBDOMAIN
+        sync: false
+      - key: EXOTEL_CALLER_ID
+        sync: false
+      - key: EXOTEL_APP_ID
+        sync: false
+      - key: EXOTEL_STREAM_SECRET
+        sync: false
+      - key: TTS_PROVIDER
+        value: cartesia
