@@ -1,0 +1,24 @@
+[Unit]
+Description=Steelman Solar voice agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=steelman
+WorkingDirectory=/opt/steelman
+EnvironmentFile=/opt/steelman/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+# A crash mid-campaign must not take the box down or lose the queue.
+StandardOutput=append:/var/log/steelman/agent.log
+StandardError=append:/var/log/steelman/agent.log
+# data/ holds leads and transcripts — keep it writable, lock down everything else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

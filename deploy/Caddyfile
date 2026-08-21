@@ -1,0 +1,13 @@
+# Replace with your domain. Caddy obtains and renews the certificate automatically.
+# No domain? Use nip.io with the droplet's IP, e.g. 203-0-113-45.nip.io — it resolves
+# to that IP and Let's Encrypt will issue for it.
+agent.example.com {
+	encode gzip
+
+	# Websockets need no special config in Caddy v2 — reverse_proxy upgrades them.
+	reverse_proxy localhost:3000
+
+	log {
+		output file /var/log/caddy/steelman.log
+	}
+}

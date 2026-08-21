@@ -173,7 +173,38 @@ When Deepgram reports `UserStartedSpeaking`, the bridge drops its local buffer *
 `clear` to Exotel. Without the `clear`, audio already handed to Exotel keeps playing and the
 agent talks over the caller for a second or two.
 
-## Deploying
+## Deploying to a DigitalOcean droplet
+
+A droplet suits this better than a PaaS: the filesystem persists, so `data/store.json`
+(leads, calls, transcripts) survives restarts. Basic 1 vCPU / 1 GB is plenty — the server
+proxies audio, it does not transcode. Pick **Bangalore (BLR1)**: voice latency is audible
+and every hop counts.
+
+```bash
+ssh root@<droplet-ip>
+curl -fsSL https://raw.githubusercontent.com/mr-Rav-an/voice_ai/main/deploy/setup.sh -o setup.sh
+bash setup.sh agent.yourdomain.com
+```
+
+That installs Node 22 and Caddy, clones the repo to `/opt/steelman`, creates an unprivileged
+`steelman` user, registers a systemd unit with `Restart=always`, and opens only 22/80/443.
+
+Then fill in `/opt/steelman/.env` and `systemctl restart steelman-agent`.
+
+**No domain?** Use [nip.io](https://nip.io): if the droplet is `203.0.113.45`, pass
+`203-0-113-45.nip.io` as the domain. It resolves to that IP and Let'"'"'s Encrypt will issue a
+real certificate for it — which matters, because Exotel requires `wss://` with valid TLS.
+
+| Task | Command |
+|---|---|
+| Logs | `journalctl -u steelman-agent -f` |
+| Restart | `systemctl restart steelman-agent` |
+| Deploy an update | `cd /opt/steelman && git pull && npm install --omit=dev && systemctl restart steelman-agent` |
+| Back up data | `cp /opt/steelman/data/store.json ~/backup-$(date +%F).json` |
+
+`data/store.json` is the only stateful thing on the box. Nothing else needs backing up.
+
+## Deploying to Render
 
 `render.yaml` is ready — Render → New → Blueprint, point it at the repo, then paste the env
 vars (all are `sync: false`, so none are stored in git). Notes baked into that file:
@@ -183,6 +214,8 @@ vars (all are `sync: false`, so none are stored in git). Notes baked into that f
 - **`region: singapore`** to match this account's Exotel data centre. Voice latency is audible,
   so keep the server near the telephony.
 - **`healthCheckPath: /health`** returns `{ok, uptime}`.
+- **Render'"'"'s filesystem is ephemeral** — `data/store.json` is wiped on every deploy. Attach a
+  persistent disk mounted at `data/`, or use a droplet instead.
 
 ### Websocket auth
 
