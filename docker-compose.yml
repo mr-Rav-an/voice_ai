@@ -1,0 +1,20 @@
+services:
+  voice-ai:
+    build: .
+    image: steelman-solar-voice-agent:latest
+    container_name: voice-ai
+    ports:
+      - "3005:3005"
+    # Secrets stay on the host — never bake .env into the image
+    env_file:
+      - .env
+    environment:
+      PORT: "3005"
+      NODE_ENV: production
+    volumes:
+      # Persist leads/calls across container restarts
+      - voice-ai-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  voice-ai-data:
