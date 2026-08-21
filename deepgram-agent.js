@@ -13,7 +13,7 @@ const DG_URL = "wss://agent.deepgram.com/v1/agent/converse";
  * @param {(msg: object) => void} opts.onEvent   every JSON message from Deepgram
  * @param {object} [opts.overrides]  shallow-merged into settings.agent
  */
-export function connectAgent({ sampleRate = 24000, onAudio, onEvent, overrides = {} }) {
+export function connectAgent({ sampleRate = 24000, onAudio, onEvent, overrides = {}, ctx = null }) {
   const apiKey = process.env.DEEPGRAM_API_KEY;
   if (!apiKey) throw new Error("DEEPGRAM_API_KEY is not set");
 
@@ -43,7 +43,7 @@ export function connectAgent({ sampleRate = 24000, onAudio, onEvent, overrides =
 
     if (msg.type === "FunctionCallRequest") {
       for (const call of msg.functions || []) {
-        const result = runTool(call.name, call.arguments);
+        const result = runTool(call.name, call.arguments, ctx);
         console.log(`[tool] ${call.name} ->`, JSON.stringify(result));
         dg.send(JSON.stringify({
           type: "FunctionCallResponse", id: call.id, name: call.name,

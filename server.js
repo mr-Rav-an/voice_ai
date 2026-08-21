@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { connectAgent } from "./deepgram-agent.js";
 import { handleExotelStream } from "./exotel/stream.js";
+import { handleApi } from "./api.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -17,8 +18,10 @@ if (!process.env.DEEPGRAM_API_KEY) {
 
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+
+  if (await handleApi(req, res, url)) return;
 
   if (url.pathname === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -36,7 +39,10 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const file = url.pathname === "/" ? "/index.html" : url.pathname;
+  const file =
+    url.pathname === "/" ? "/dashboard.html" :
+    url.pathname === "/demo" ? "/index.html" :
+    url.pathname;
   const full = path.join(__dirname, "public", path.normalize(file).replace(/^(\.\.[/\\])+/, ""));
   fs.readFile(full, (err, data) => {
     if (err) return res.writeHead(404).end("Not found");
@@ -111,6 +117,7 @@ process.on("uncaughtException", (e) => console.error("[uncaughtException]", e));
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Steelman Solar agent`);
-  console.log(`  browser demo  -> http://localhost:${PORT}`);
+  console.log(`  dashboard     -> http://localhost:${PORT}`);
+  console.log(`  mic demo      -> http://localhost:${PORT}/demo`);
   console.log(`  exotel stream -> ws://localhost:${PORT}/exotel-stream`);
 });

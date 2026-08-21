@@ -4,6 +4,7 @@
 // JSON frames. Deepgram accepts linear16 @ 8000 in both directions, so audio passes
 // through with only base64 transcoding and re-chunking — no resampling.
 import { connectAgent } from "../deepgram-agent.js";
+import * as store from "../store.js";
 
 // Exotel wants multiples of 320 bytes; 3200 = 100ms of 8 kHz 16-bit mono.
 const CHUNK = 3200;
@@ -18,6 +19,7 @@ export function handleExotelStream(ws) {
   let outBuf = Buffer.alloc(0);
   let callSid = null;
   let agent = null;
+  let callRecord = null;
   let sentFrames = 0;
   let sentBytes = 0;
   let recvFrames = 0;
@@ -72,6 +74,7 @@ export function handleExotelStream(ws) {
   const startAgent = () => {
     agent = connectAgent({
       sampleRate: 8000,
+      ctx: { get callId() { return callRecord?.id; }, get leadId() { return callRecord?.leadId; } },
       onAudio: (pcm) => {
         if (dgBytes === 0) console.log(`[exotel] ${el()} FIRST audio from Deepgram (${pcm.length}B)`);
         dgBytes += pcm.length;
@@ -107,6 +110,12 @@ export function handleExotelStream(ws) {
             console.log(`[exotel] ${el()} turn done — sent ${sentFrames}/${sentBytes}B, ` +
                         `recv ${recvFrames}, echo-gated ${gatedFrames}`);
             break;
+          case "ConversationText":
+            if (callRecord) {
+              store.appendTranscript(callRecord.id, msg.role === "assistant" ? "agent" : "customer", msg.content);
+            }
+            break;
+
           case "Closed":
             console.log(`[exotel ${callSid}] agent closed`, msg.code, msg.reason || "");
             if (ws.readyState === ws.OPEN) ws.close();
@@ -136,6 +145,14 @@ export function handleExotelStream(ws) {
         streamSid = msg.stream_sid || msg.start?.stream_sid;
         callSid = msg.start?.call_sid;
         const fmt = msg.start?.media_format;
+        {
+          const phone = msg.start?.from;
+          const existing = callSid ? store.getCallBySid(callSid) : null;
+          const lead = store.findLeadByPhone(phone);
+          callRecord = existing || store.createCall({ callSid, phone, leadId: lead?.id || null });
+          store.updateCall(callRecord.id, { connected: true, leadId: callRecord.leadId || lead?.id || null });
+          if (lead) store.updateLead(lead.id, { status: "calling", lastCallId: callRecord.id });
+        }
         console.log(`[exotel] ${el()} start call=${callSid} from=${msg.start?.from} to=${msg.start?.to}`,
                     fmt ? `format=${fmt.encoding}/${fmt.sample_rate}` : "");
         if (fmt?.sample_rate && Number(fmt.sample_rate) !== 8000) {
@@ -179,6 +196,15 @@ export function handleExotelStream(ws) {
   });
 
   ws.on("close", (code, reason) => {
+    if (callRecord) {
+      const ended = new Date();
+      store.updateCall(callRecord.id, {
+        endedAt: ended.toISOString(),
+        durationSec: Math.round((ended - new Date(callRecord.startedAt)) / 1000),
+      });
+      const lead = callRecord.leadId ? store.getLead(callRecord.leadId) : null;
+      if (lead && lead.status === "calling") store.updateLead(lead.id, { status: "done" });
+    }
     console.log(`[exotel ${callSid}] ${el()} websocket closed code=${code} reason="${reason?.toString() || ""}" ` +
                 `sent=${sentFrames} recv=${recvFrames}`);
     agent?.close();

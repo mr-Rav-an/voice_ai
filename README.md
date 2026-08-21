@@ -85,6 +85,43 @@ CARTESIA_VOICE_ID=<voice id>   # pick a Hindi voice from Cartesia's library
 - Bills under ₹1,500/month are told honestly that solar won't pay off, rather than booked.
 - Renters and out-of-service-area callers are turned away politely.
 
+## Dashboard
+
+`http://localhost:3000` — upload leads, run a campaign, review every call.
+(The browser mic demo moved to `/demo`.)
+
+- **Upload** — paste CSV or pick a file. Columns `name, phone, city, notes`; the header row is
+  detected, and a headerless file works if column one is a phone number. Numbers may be
+  10-digit, `0`-prefixed or `+91`. Duplicates and invalid numbers are skipped and reported.
+- **Campaign** — Start works the pending queue one lead at a time, polling Exotel for each
+  outcome so no-answer and busy are recorded too, not just connected calls. Per-lead
+  "Call now" dials outside the queue.
+- **Calls** — outcome, interest, and captured data inline (city, bill, system size, booking,
+  duration, turns). Click a row for the full transcript and every tool call with arguments
+  and results.
+
+### How outcomes are decided
+
+Interest is classified by the agent, not inferred from keywords: `set_call_outcome` is a tool
+it calls once the outcome is clear (`interested` / `callback` / `not_interested` /
+`disqualified`). `book_appointment` also marks the call hot, a sub-₹1,500 bill marks it
+disqualified with a reason, and `remove_from_list` sets the lead to `dnc` so the dialer
+skips it permanently.
+
+### Storage
+
+[store.js](store.js) is a JSON file under `data/` (gitignored — it holds lead phone numbers).
+Deliberately dependency-free and adequate for campaigns in the hundreds.
+
+Two constraints worth knowing before scaling:
+
+- **Single process.** The whole store is held in memory and written back on change, so a
+  second process will not see the first's writes. Move to Postgres or SQLite before running
+  more than one instance.
+- **Sequential dialing.** Each concurrent call is its own Deepgram session with its own cost,
+  and Exotel rate-limits Voice APIs to 200/min. `CONCURRENCY` is a one-line change in
+  [campaign.js](campaign.js), but make it a deliberate one.
+
 ## Real phone calls (Exotel)
 
 ```
@@ -165,8 +202,9 @@ reaches the socket bills Deepgram.
 - Replace the mocks in `tools.js` with real CRM/calendar calls.
 - Replace ngrok with a stable public host + TLS. Exotel needs the websocket reachable for the
   whole call.
-- `book_appointment` writes to an in-memory array — every booking is lost on restart. This is
-  the last real gap before taking live leads.
+- Replace the JSON store with a real database once you are past a few hundred leads.
+- DND/TRAI scrubbing before any campaign. `remove_from_list` marks the lead `dnc` in the
+  store, but that is not a substitute for scrubbing against the national registry.
 - Check DND/TRAI scrubbing before dialing. `remove_from_list` must write to a real suppression list.
 - The rupee constants in `agent-config.js` (₹62,000/kW, ₹8/unit, 1,400 units/kW/year) are
   ballpark national averages — replace with your actual pricing and state discom tariffs.

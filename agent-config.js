@@ -145,6 +145,27 @@ export const FUNCTIONS = [
     parameters: { type: "object", properties: { reason: { type: "string" } }, required: [] },
   },
   {
+    name: "set_call_outcome",
+    description:
+      "Record how the call went. Call this once, as soon as the outcome is clear — after " +
+      "booking, after a refusal, or when the person is disqualified. Do not wait for the " +
+      "call to end.",
+    parameters: {
+      type: "object",
+      properties: {
+        outcome: {
+          type: "string",
+          description:
+            "interested (wants to proceed or booked), callback (asked to be called later), " +
+            "not_interested (declined), disqualified (renter, out of area, bill too low)",
+        },
+        interest: { type: "string", description: "hot, warm, or cold" },
+        reason: { type: "string", description: "One short line, e.g. 'bill only 2000' or 'Kolkata, out of area'" },
+      },
+      required: ["outcome"],
+    },
+  },
+  {
     name: "transfer_to_human",
     description: "Hand the call to a human rep for questions you cannot answer.",
     parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] },

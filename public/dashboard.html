@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Steelman Solar — Call Dashboard</title>
+<style>
+  :root { color-scheme: dark;
+    --bg:#0e1116; --panel:#151921; --panel2:#1b202a; --line:#262c36;
+    --txt:#e6e9ef; --dim:#8b93a1; --accent:#f5a524;
+    --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --info:#60a5fa; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  header { padding:14px 22px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
+  .sun { width:22px; height:22px; border-radius:50%; background:var(--accent); box-shadow:0 0 16px rgba(245,165,36,.5); }
+  h1 { font-size:15px; margin:0; font-weight:600; }
+  header .spacer { flex:1; }
+  main { padding:22px; max-width:1250px; margin:0 auto; }
+
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px; margin-bottom:22px; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .stat .n { font-size:24px; font-weight:650; letter-spacing:-.02em; }
+  .stat .l { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin-top:2px; }
+
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:18px; }
+  .tab { padding:9px 16px; cursor:pointer; color:var(--dim); border-bottom:2px solid transparent; font-weight:500; }
+  .tab.on { color:var(--txt); border-bottom-color:var(--accent); }
+
+  .bar { display:flex; gap:10px; align-items:center; margin-bottom:14px; flex-wrap:wrap; }
+  button { font:inherit; font-weight:600; padding:8px 15px; border-radius:7px; border:0; cursor:pointer;
+    background:var(--accent); color:#1a1200; }
+  button.ghost { background:var(--panel2); color:var(--txt); border:1px solid var(--line); }
+  button.danger { background:#3a2222; color:var(--bad); border:1px solid #522; }
+  button:disabled { opacity:.45; cursor:default; }
+  input[type=text], textarea, select { font:inherit; padding:8px 11px; border-radius:7px;
+    border:1px solid var(--line); background:var(--panel); color:var(--txt); }
+  textarea { width:100%; min-height:110px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
+
+  .wrap { overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--dim);
+    padding:10px 13px; border-bottom:1px solid var(--line); font-weight:600; white-space:nowrap; }
+  td { padding:10px 13px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  tr:last-child td { border-bottom:0; }
+  tr.click { cursor:pointer; }
+  tr.click:hover { background:var(--panel2); }
+
+  .pill { display:inline-block; padding:2px 9px; border-radius:99px; font-size:11.5px; font-weight:600; white-space:nowrap; }
+  .p-interested,.p-done,.p-hot { background:#12301f; color:var(--ok); }
+  .p-callback,.p-calling,.p-warm { background:#332711; color:var(--warn); }
+  .p-not_interested,.p-failed,.p-dnc,.p-cold { background:#331717; color:var(--bad); }
+  .p-disqualified,.p-pending { background:#1e2530; color:var(--dim); }
+  .p-no_answer { background:#1e2530; color:var(--dim); }
+
+  .muted { color:var(--dim); }
+  .empty { padding:40px; text-align:center; color:var(--dim); }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--dim); margin-right:6px; }
+  .dot.live { background:var(--ok); animation:pulse 1.4s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  dialog { border:1px solid var(--line); background:var(--panel); color:var(--txt);
+    border-radius:12px; padding:0; max-width:760px; width:92vw; }
+  dialog::backdrop { background:rgba(0,0,0,.65); }
+  .dhead { padding:15px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+  .dbody { padding:20px; max-height:68vh; overflow-y:auto; }
+  .kv { display:grid; grid-template-columns:150px 1fr; gap:7px 14px; margin-bottom:18px; font-size:13px; }
+  .kv .k { color:var(--dim); }
+  .turn { margin-bottom:11px; }
+  .turn .who { font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); }
+  .turn.agent .who { color:var(--accent); }
+  .tool { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:#7fd1a8;
+    background:#12251c; border-left:2px solid #7fd1a8; padding:7px 10px; border-radius:4px;
+    white-space:pre-wrap; margin-bottom:11px; }
+  h3 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 10px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="sun"></div>
+  <h1>Steelman Solar — Call Dashboard</h1>
+  <div class="spacer"></div>
+  <span id="campaign-status" class="muted"><span class="dot"></span>idle</span>
+  <button id="btn-start">Start campaign</button>
+  <button id="btn-stop" class="ghost" disabled>Stop</button>
+</header>
+
+<main>
+  <div class="stats" id="stats"></div>
+
+  <div class="tabs">
+    <div class="tab on" data-tab="calls">Calls</div>
+    <div class="tab" data-tab="leads">Leads</div>
+    <div class="tab" data-tab="upload">Upload</div>
+  </div>
+
+  <section id="tab-calls">
+    <div class="wrap"><table>
+      <thead><tr><th>When</th><th>Phone</th><th>Name</th><th>Outcome</th><th>Interest</th>
+        <th>City</th><th>Bill</th><th>System</th><th>Booked</th><th>Dur</th><th>Turns</th></tr></thead>
+      <tbody id="calls-body"></tbody>
+    </table></div>
+  </section>
+
+  <section id="tab-leads" hidden>
+    <div class="bar">
+      <span class="muted" id="leads-count"></span>
+    </div>
+    <div class="wrap"><table>
+      <thead><tr><th>Name</th><th>Phone</th><th>City</th><th>Status</th><th>Attempts</th><th></th></tr></thead>
+      <tbody id="leads-body"></tbody>
+    </table></div>
+  </section>
+
+  <section id="tab-upload" hidden>
+    <div class="bar"><strong>Paste CSV or upload a file</strong></div>
+    <p class="muted" style="margin-top:0">
+      Columns: <code>name, phone, city, notes</code> — a header row is detected automatically.
+      Phone can be 10-digit, 0-prefixed, or +91. Duplicates and invalid numbers are skipped.
+    </p>
+    <textarea id="csv" placeholder="name,phone,city&#10;Ankur,6294035244,Kolkata&#10;Rohit,9871606366,Delhi"></textarea>
+    <div class="bar" style="margin-top:12px">
+      <button id="btn-import">Import leads</button>
+      <input type="file" id="file" accept=".csv,text/csv" />
+      <span id="import-msg" class="muted"></span>
+    </div>
+  </section>
+</main>
+
+<dialog id="detail">
+  <div class="dhead">
+    <strong id="d-title">Call</strong>
+    <div class="spacer" style="flex:1"></div>
+    <button class="ghost" onclick="document.getElementById('detail').close()">Close</button>
+  </div>
+  <div class="dbody" id="d-body"></div>
+</dialog>
+
+<script src="/dashboard.js"></script>
+</body>
+</html>
