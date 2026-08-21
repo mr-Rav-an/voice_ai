@@ -7,6 +7,7 @@ import { WebSocketServer } from "ws";
 import { connectAgent } from "./deepgram-agent.js";
 import { handleExotelStream } from "./exotel/stream.js";
 import { handleApi } from "./api.js";
+import * as store from "./store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -113,7 +114,12 @@ browserWss.on("connection", (browser) => {
 
 // A crash here kills every in-flight call, so log and keep serving.
 process.on("unhandledRejection", (e) => console.error("[unhandledRejection]", e));
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, async () => { await store.close(); process.exit(0); });
+}
 process.on("uncaughtException", (e) => console.error("[uncaughtException]", e));
+
+await store.init();
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`Steelman Solar agent`);

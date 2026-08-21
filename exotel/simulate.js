@@ -6,7 +6,8 @@ import { WebSocket } from "ws";
 import fs from "node:fs";
 
 const URL_ = process.env.WS_URL || "ws://localhost:3000/exotel-stream";
-const STREAM_SID = "test_stream_sid_001";
+const STREAM_SID = `sim_stream_${Date.now()}`;
+const CALL_SID = `sim_call_${Date.now()}`;
 const ws = new WebSocket(URL_);
 
 let seq = 1, chunk = 1;
@@ -20,7 +21,7 @@ ws.on("open", () => {
   ws.send(JSON.stringify({
     event: "start", sequence_number: seq++, stream_sid: STREAM_SID,
     start: {
-      stream_sid: STREAM_SID, call_sid: "test_call_sid_001", account_sid: "testsid",
+      stream_sid: STREAM_SID, call_sid: CALL_SID, account_sid: "testsid",
       from: "09876543210", to: "01141170795",
       custom_parameters: {},
       media_format: { encoding: "base64", sample_rate: "8000", bit_rate: "16" },
@@ -53,7 +54,7 @@ ws.on("message", (raw) => {
 setTimeout(() => {
   ws.send(JSON.stringify({
     event: "stop", sequence_number: seq++, stream_sid: STREAM_SID,
-    stop: { call_sid: "test_call_sid_001", account_sid: "testsid", reason: "callended" },
+    stop: { call_sid: CALL_SID, account_sid: "testsid", reason: "callended" },
   }));
   const pcm = Buffer.concat(received);
   if (pcm.length) {

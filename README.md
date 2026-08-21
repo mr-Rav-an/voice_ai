@@ -110,14 +110,19 @@ skips it permanently.
 
 ### Storage
 
-[store.js](store.js) is a JSON file under `data/` (gitignored — it holds lead phone numbers).
-Deliberately dependency-free and adequate for campaigns in the hundreds.
+MongoDB. Set `MONGO_URI` and `MONGO_DB` (default `AI`). Collections are namespaced
+`solar_leads` and `solar_calls`, since the `AI` database is shared with other applications.
+An existing `data/store.json` is imported once on first boot and renamed `.migrated`.
+
+[store.js](store.js) keeps documents in Mongo *and* in memory. The in-memory mirror is not
+an optimisation: the call bridge and tool handlers run inside Deepgram's function-call path,
+which is synchronous, so reads cannot await. Writes update memory immediately and are
+mirrored to Mongo; a failed write is logged and never thrown into a live call.
 
 Two constraints worth knowing before scaling:
 
-- **Single process.** The whole store is held in memory and written back on change, so a
-  second process will not see the first's writes. Move to Postgres or SQLite before running
-  more than one instance.
+- **One writer process.** Because reads come from the in-memory mirror, a second instance
+  will not see the first's writes. Make the read paths async before running more than one.
 - **Sequential dialing.** Each concurrent call is its own Deepgram session with its own cost,
   and Exotel rate-limits Voice APIs to 200/min. `CONCURRENCY` is a one-line change in
   [campaign.js](campaign.js), but make it a deliberate one.
@@ -200,9 +205,10 @@ real certificate for it — which matters, because Exotel requires `wss://` with
 | Logs | `journalctl -u steelman-agent -f` |
 | Restart | `systemctl restart steelman-agent` |
 | Deploy an update | `cd /opt/steelman && git pull && npm install --omit=dev && systemctl restart steelman-agent` |
-| Back up data | `cp /opt/steelman/data/store.json ~/backup-$(date +%F).json` |
+| Back up data | `mongodump --uri "$MONGO_URI" --db AI --collection solar_calls` |
 
-`data/store.json` is the only stateful thing on the box. Nothing else needs backing up.
+The droplet is stateless — leads and calls live in MongoDB, so nothing on the box needs
+backing up.
 
 ## Deploying to Render
 

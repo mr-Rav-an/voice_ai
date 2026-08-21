@@ -1,47 +1,100 @@
-// File-backed store for leads and calls. Deliberately dependency-free: JSON on disk is
-// enough for campaigns in the hundreds and survives restarts, which the in-memory
-// version did not. Swap for Postgres when volume or concurrency demands it.
+// MongoDB-backed store for leads and calls.
+//
+// Documents live in Mongo, but the process also keeps them in memory: the call bridge and
+// the tool handlers run inside Deepgram's function-call path, which is synchronous, so
+// reads must not await. Writes go to memory immediately and are mirrored to Mongo. That
+// means one writer process — run a single instance until the read paths are made async.
+import { MongoClient } from "mongodb";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "data");
-const FILE = path.join(DIR, "store.json");
+const DB_NAME = process.env.MONGO_DB || "AI";
+const LEADS = "solar_leads"; // namespaced: the AI database is shared
+const CALLS = "solar_calls";
 
-const empty = { leads: [], calls: [], seq: { lead: 1, call: 1 } };
-let db = empty;
-let writeTimer = null;
+let client = null;
+let leadsCol = null;
+let callsCol = null;
+let ready = false;
 
-function load() {
+const mem = { leads: [], calls: [] };
+const seq = { lead: 1, call: 1 };
+
+const nextId = (prefix, key) => `${prefix}${seq[key]++}`;
+
+/** Mirror a document to Mongo. Failures are logged, never thrown into a live call. */
+function mirror(col, doc) {
+  if (!ready || !col) return;
+  col.replaceOne({ id: doc.id }, doc, { upsert: true }).catch((e) =>
+    console.error(`[store] write failed for ${doc.id}:`, e.message)
+  );
+}
+
+export async function init() {
+  const uri = process.env.MONGO_URI;
+  if (!uri) throw new Error("MONGO_URI is not set");
+
+  client = new MongoClient(uri, { serverSelectionTimeoutMS: 10000 });
+  await client.connect();
+  const db = client.db(DB_NAME);
+  leadsCol = db.collection(LEADS);
+  callsCol = db.collection(CALLS);
+
+  await leadsCol.createIndex({ id: 1 }, { unique: true });
+  await leadsCol.createIndex({ phone: 1 }, { unique: true });
+  await callsCol.createIndex({ id: 1 }, { unique: true });
+  await callsCol.createIndex({ callSid: 1 });
+  await callsCol.createIndex({ startedAt: -1 });
+
+  mem.leads = await leadsCol.find({}, { projection: { _id: 0 } }).toArray();
+  mem.calls = await callsCol.find({}, { projection: { _id: 0 } }).toArray();
+  ready = true;
+
+  const maxNum = (arr, p) =>
+    arr.reduce((m, x) => Math.max(m, Number(String(x.id).replace(p, "")) || 0), 0);
+  seq.lead = maxNum(mem.leads, "L") + 1;
+  seq.call = maxNum(mem.calls, "C") + 1;
+
+  await migrateJsonFile();
+
+  // A lead is only "calling" while a process is dialing it. Nothing is in flight at
+  // startup, so release anything a crash left stranded rather than stranding it forever.
+  const stranded = mem.leads.filter((l) => l.status === "calling");
+  stranded.forEach((l) => { l.status = "pending"; mirror(leadsCol, l); });
+
+  console.log(
+    `[store] mongo ${DB_NAME}.${LEADS}/${CALLS} — ${mem.leads.length} leads, ${mem.calls.length} calls` +
+    (stranded.length ? `, released ${stranded.length} stranded` : "")
+  );
+}
+
+/** One-time import of the old file store, so nothing from local testing is lost. */
+async function migrateJsonFile() {
+  if (mem.leads.length || mem.calls.length) return;
+  const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "data", "store.json");
+  if (!fs.existsSync(file)) return;
   try {
-    db = { ...empty, ...JSON.parse(fs.readFileSync(FILE, "utf8")) };
-  } catch {
-    db = structuredClone(empty);
+    const old = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (old.leads?.length) {
+      mem.leads = old.leads;
+      await leadsCol.insertMany(old.leads, { ordered: false }).catch(() => {});
+    }
+    if (old.calls?.length) {
+      mem.calls = old.calls;
+      await callsCol.insertMany(old.calls, { ordered: false }).catch(() => {});
+    }
+    if (old.seq) Object.assign(seq, old.seq);
+    fs.renameSync(file, file + ".migrated");
+    console.log(`[store] migrated ${old.leads?.length || 0} leads / ${old.calls?.length || 0} calls from data/store.json`);
+  } catch (e) {
+    console.error("[store] migration skipped:", e.message);
   }
 }
 
-function persist() {
-  // Debounced: a live call writes on every transcript line.
-  if (writeTimer) return;
-  writeTimer = setTimeout(() => {
-    writeTimer = null;
-    fs.mkdirSync(DIR, { recursive: true });
-    fs.writeFileSync(FILE, JSON.stringify(db, null, 2));
-  }, 250);
-}
-
-load();
-
-// A lead is only "calling" while a process is actively dialing it. If we are loading the
-// file, no call is in flight — anything left in that state was stranded by a crash or
-// restart, so release it back to the queue rather than leaving it undialable forever.
-{
-  const stranded = db.leads.filter((l) => l.status === "calling");
-  if (stranded.length) {
-    stranded.forEach((l) => (l.status = "pending"));
-    console.log(`[store] released ${stranded.length} lead(s) stranded in "calling"`);
-    persist();
-  }
+export async function close() {
+  ready = false;
+  if (client) await client.close();
 }
 
 export const normalizePhone = (raw) => {
@@ -52,99 +105,82 @@ export const normalizePhone = (raw) => {
 
 // --- leads -----------------------------------------------------------------
 export function addLeads(rows) {
-  const added = [];
-  const skipped = [];
+  const added = [], skipped = [];
   for (const row of rows) {
     const phone = normalizePhone(row.phone);
-    if (!phone) {
-      skipped.push({ ...row, reason: "invalid phone" });
-      continue;
-    }
-    if (db.leads.some((l) => l.phone === phone)) {
+    if (!phone) { skipped.push({ ...row, reason: "invalid phone" }); continue; }
+    if (mem.leads.some((l) => l.phone === phone)) {
       skipped.push({ ...row, phone, reason: "duplicate" });
       continue;
     }
     const lead = {
-      id: `L${db.seq.lead++}`,
-      name: row.name || "",
-      phone,
-      city: row.city || "",
-      notes: row.notes || "",
-      status: "pending", // pending | calling | done | failed | dnc
-      attempts: 0,
-      lastCallId: null,
+      id: nextId("L", "lead"),
+      name: row.name || "", phone, city: row.city || "", notes: row.notes || "",
+      status: "pending", attempts: 0, lastCallId: null,
       createdAt: new Date().toISOString(),
     };
-    db.leads.push(lead);
+    mem.leads.push(lead);
+    mirror(leadsCol, lead);
     added.push(lead);
   }
-  persist();
   return { added, skipped };
 }
 
-export const listLeads = () => db.leads;
-export const getLead = (id) => db.leads.find((l) => l.id === id);
-export const findLeadByPhone = (phone) => db.leads.find((l) => l.phone === normalizePhone(phone));
+export const listLeads = () => mem.leads;
+export const getLead = (id) => mem.leads.find((l) => l.id === id);
+export const findLeadByPhone = (phone) => mem.leads.find((l) => l.phone === normalizePhone(phone));
 
 export function updateLead(id, patch) {
   const lead = getLead(id);
-  if (lead) Object.assign(lead, patch);
-  persist();
+  if (!lead) return null;
+  Object.assign(lead, patch);
+  mirror(leadsCol, lead);
   return lead;
 }
 
 export function deleteLead(id) {
-  const i = db.leads.findIndex((l) => l.id === id);
-  if (i >= 0) db.leads.splice(i, 1);
-  persist();
+  const i = mem.leads.findIndex((l) => l.id === id);
+  if (i < 0) return;
+  mem.leads.splice(i, 1);
+  if (ready) leadsCol.deleteOne({ id }).catch((e) => console.error("[store] delete failed:", e.message));
 }
 
-/** Next lead eligible to dial. */
 export function nextPendingLead(maxAttempts = 2) {
-  return db.leads.find(
-    (l) => (l.status === "pending" || (l.status === "failed" && l.attempts < maxAttempts)) && l.status !== "dnc"
+  return mem.leads.find(
+    (l) => l.status !== "dnc" && (l.status === "pending" || (l.status === "failed" && l.attempts < maxAttempts))
   );
 }
 
 // --- calls -----------------------------------------------------------------
 export function createCall({ callSid, leadId, phone, direction = "outbound" }) {
   const call = {
-    id: `C${db.seq.call++}`,
-    callSid: callSid || null,
-    leadId: leadId || null,
+    id: nextId("C", "call"),
+    callSid: callSid || null, leadId: leadId || null,
     phone: normalizePhone(phone) || phone || null,
-    direction,
-    startedAt: new Date().toISOString(),
-    endedAt: null,
-    durationSec: null,
-    exotelStatus: null,
-    connected: false,
-    outcome: null, // interested | not_interested | callback | disqualified | no_answer | dnc
-    interest: null, // hot | warm | cold
-    reason: null,
-    captured: {}, // owner, monthlyBill, city, rooftopSqft, systemKw, netCost, savings
-    booking: null,
-    transcript: [], // {role, text, at}
-    toolCalls: [],
+    direction, startedAt: new Date().toISOString(),
+    endedAt: null, durationSec: null, exotelStatus: null, connected: false,
+    outcome: null, interest: null, reason: null,
+    captured: {}, booking: null, transcript: [], toolCalls: [],
   };
-  db.calls.push(call);
-  persist();
+  mem.calls.push(call);
+  mirror(callsCol, call);
   return call;
 }
 
-export const getCall = (id) => db.calls.find((c) => c.id === id);
-export const getCallBySid = (sid) => db.calls.find((c) => c.callSid === sid);
-export const listCalls = () => db.calls;
+export const getCall = (id) => mem.calls.find((c) => c.id === id);
+export const getCallBySid = (sid) => mem.calls.find((c) => c.callSid === sid);
+export const listCalls = () => mem.calls;
 
 export function updateCall(id, patch) {
   const call = getCall(id);
   if (!call) return null;
   if (patch.captured) {
     call.captured = { ...call.captured, ...patch.captured };
+    patch = { ...patch };
     delete patch.captured;
   }
   Object.assign(call, patch);
-  persist();
+  mirror(callsCol, call);
   return call;
 }
 
@@ -152,24 +188,24 @@ export function appendTranscript(id, role, text) {
   const call = getCall(id);
   if (!call || !text) return;
   call.transcript.push({ role, text, at: new Date().toISOString() });
-  persist();
+  mirror(callsCol, call);
 }
 
 export function appendToolCall(id, name, args, result) {
   const call = getCall(id);
   if (!call) return;
   call.toolCalls.push({ name, args, result, at: new Date().toISOString() });
-  persist();
+  mirror(callsCol, call);
 }
 
 // --- stats -----------------------------------------------------------------
 export function stats() {
-  const calls = db.calls;
+  const calls = mem.calls;
   const by = (k) => calls.reduce((a, c) => ((a[c[k] || "unknown"] = (a[c[k] || "unknown"] || 0) + 1), a), {});
   const connected = calls.filter((c) => c.connected);
   return {
-    leads: db.leads.length,
-    leadsPending: db.leads.filter((l) => l.status === "pending").length,
+    leads: mem.leads.length,
+    leadsPending: mem.leads.filter((l) => l.status === "pending").length,
     calls: calls.length,
     connected: connected.length,
     connectRate: calls.length ? Math.round((connected.length / calls.length) * 100) : 0,
@@ -182,7 +218,7 @@ export function stats() {
   };
 }
 
-/** Minimal CSV parser — handles quoted fields and a header row. */
+/** Minimal CSV parser — quoted fields, optional header, phone column found by content. */
 export function parseCsv(text) {
   const rows = [];
   let field = "", row = [], inQuotes = false;
@@ -209,8 +245,6 @@ export function parseCsv(text) {
   const iCity = idx("city", "location", "town", "area");
   const iNotes = idx("note", "remark", "comment");
 
-  // The header row may be absent, or named something we don't recognise. Decide by
-  // content instead: pick the column where most values look like Indian mobile numbers.
   const looksHeaderless = rows[0].some((c) => normalizePhone(c));
   const body = looksHeaderless ? rows : rows.slice(1);
 
@@ -221,7 +255,6 @@ export function parseCsv(text) {
       const hits = body.filter((r) => normalizePhone(r[col])).length;
       if (hits > bestHits) { bestHits = hits; best = col; }
     }
-    // Require it to work for at least half the rows, so we don't latch onto a stray cell.
     if (best >= 0 && bestHits >= Math.max(1, Math.floor(body.length / 2))) iPhone = best;
   }
   if (iPhone === -1) return [];

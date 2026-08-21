@@ -24,5 +24,9 @@ services:
         sync: false
       - key: EXOTEL_STREAM_SECRET
         sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB
+        value: AI
       - key: TTS_PROVIDER
         value: cartesia
